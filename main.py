@@ -125,6 +125,13 @@ def kpi_card(label: str, value: str, sub: str = "") -> str:
     </div>"""
 
 
+def chart_placeholder(label: str, height: int = 300):
+    st.markdown(
+        f'<div class="chart-placeholder" style="height:{height}px;">📊 {label}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 PLOTLY_BASE = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
@@ -241,34 +248,13 @@ def chart_prob_distribution() -> go.Figure:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SAMPLE DATA  (hardcoded — no CSV or model needed)
+# DATA LOADING
 # ══════════════════════════════════════════════════════════════════════════════
-SAMPLE_CUSTOMERS = pd.DataFrame([
-    {"Customer ID": "C-00103", "Churn Prob.": "87%", "Risk Tier": "High",
-     "Plan": "Basic",    "Contract": "Month-to-month", "CLV ($)": "$312",
-     "Pay. Delay": 18, "Data (GB)": 0.4, "Support Tickets": 4,
-     "Days Since Login": 62, "Recommended Strategy": "Targeted Discount"},
-    {"Customer ID": "C-00247", "Churn Prob.": "79%", "Risk Tier": "High",
-     "Plan": "Standard", "Contract": "Month-to-month", "CLV ($)": "$890",
-     "Pay. Delay": 9,  "Data (GB)": 2.1, "Support Tickets": 3,
-     "Days Since Login": 45, "Recommended Strategy": "Proactive Retention Call"},
-    {"Customer ID": "C-00891", "Churn Prob.": "71%", "Risk Tier": "High",
-     "Plan": "Premium",  "Contract": "Month-to-month", "CLV ($)": "$1,540",
-     "Pay. Delay": 3,  "Data (GB)": 5.8, "Support Tickets": 2,
-     "Days Since Login": 38, "Recommended Strategy": "Proactive Retention Call"},
-    {"Customer ID": "C-01204", "Churn Prob.": "44%", "Risk Tier": "Medium",
-     "Plan": "Standard", "Contract": "One-year",       "CLV ($)": "$720",
-     "Pay. Delay": 5,  "Data (GB)": 7.2, "Support Tickets": 1,
-     "Days Since Login": 12, "Recommended Strategy": "Contract Lock-In Incentive"},
-    {"Customer ID": "C-01589", "Churn Prob.": "38%", "Risk Tier": "Medium",
-     "Plan": "Premium",  "Contract": "One-year",       "CLV ($)": "$2,100",
-     "Pay. Delay": 0,  "Data (GB)": 18.4,"Support Tickets": 1,
-     "Days Since Login": 4,  "Recommended Strategy": "Service Upgrade"},
-    {"Customer ID": "C-02034", "Churn Prob.": "12%", "Risk Tier": "Low",
-     "Plan": "Basic",    "Contract": "Two-year",       "CLV ($)": "$480",
-     "Pay. Delay": 0,  "Data (GB)": 3.1, "Support Tickets": 0,
-     "Days Since Login": 2,  "Recommended Strategy": "Personalized Re-engagement"},
-])
+@st.cache_data(show_spinner="Loading subscriber data…")
+def load_data() -> pd.DataFrame:
+    return pd.read_csv("data/voxtel_data.csv")
+
+df = load_data()
 
 STRATEGIES = [
     "Proactive Retention Call",
@@ -299,18 +285,20 @@ with st.sidebar:
 
     st.multiselect("Risk Tier",
         options=["High", "Medium", "Low"],
-        default=["High", "Medium", "Low"])
+        default=["High", "Medium", "Low"],
+        help="Activates once the model is connected.")
 
-    st.multiselect("Plan Type",
-        options=["Basic", "Standard", "Premium"],
-        default=["Basic", "Standard", "Premium"])
+    sel_plan = st.multiselect("Plan Type",
+        options=sorted(df["plan_type"].unique()),
+        default=sorted(df["plan_type"].unique()))
 
-    st.multiselect("Contract Type",
-        options=["Month-to-month", "One-year", "Two-year"],
-        default=["Month-to-month", "One-year", "Two-year"])
+    sel_contract = st.multiselect("Contract Type",
+        options=sorted(df["contract_type"].unique()),
+        default=sorted(df["contract_type"].unique()))
 
     st.slider("Min. Churn Probability",
-        min_value=0.0, max_value=1.0, value=0.30, step=0.05, format="%.0f%%")
+        min_value=0.0, max_value=1.0, value=0.30, step=0.05, format="%.0f%%",
+        help="Activates once the model is connected.")
 
     st.markdown("---")
     st.markdown("#### ⚙️ Model Info")
@@ -319,7 +307,7 @@ with st.sidebar:
         "**Source:** champion.pkl  \n"
         "**Prediction window:** next 2 months  \n"
         "**Scoring frequency:** Monthly  \n"
-        "**Subscribers scored:** 5,000"
+        f"**Subscribers loaded:** {len(df):,}"
     )
 
 
@@ -393,49 +381,73 @@ with tab1:
 # TAB 2 — AT-RISK CUSTOMERS
 # ─────────────────────────────────────────────────────────────────────────────
 with tab2:
-    st.markdown("Showing **6** subscribers matching current filters.")
-    st.dataframe(SAMPLE_CUSTOMERS, use_container_width=True, height=280)
+    # Apply the two filters that work without the model
+    df_filtered = df[
+        (df["plan_type"].isin(sel_plan)) &
+        (df["contract_type"].isin(sel_contract))
+    ].copy()
+
+    st.markdown(f"Showing **{len(df_filtered):,}** subscribers matching current filters.")
+
+    # Table — select and rename the most relevant columns
+    display_cols = {
+        "customer_id":         "Customer ID",
+        "plan_type":           "Plan",
+        "contract_type":       "Contract",
+        "tenure_months":       "Tenure (mo.)",
+        "monthly_charges":     "Monthly ($)",
+        "payment_delay_days":  "Pay. Delay (days)",
+        "data_usage_gb":       "Data (GB)",
+        "num_support_tickets": "Support Tickets",
+        "last_login_days_ago": "Days Since Login",
+        "clv_estimated":       "CLV ($)",
+    }
+    st.dataframe(
+        df_filtered[list(display_cols.keys())].rename(columns=display_cols),
+        use_container_width=True,
+        height=320,
+    )
 
     st.markdown('<div class="section-title">Customer Detail</div>',
                 unsafe_allow_html=True)
 
     selected_id = st.selectbox(
         "Select a subscriber to inspect:",
-        options=SAMPLE_CUSTOMERS["Customer ID"].tolist(),
+        options=df_filtered["customer_id"].tolist(),
     )
 
-    row = SAMPLE_CUSTOMERS[SAMPLE_CUSTOMERS["Customer ID"] == selected_id].iloc[0]
+    row = df_filtered[df_filtered["customer_id"] == selected_id].iloc[0]
 
     d1, d2, d3 = st.columns(3)
     with d1:
         st.markdown(f"""
-        **{row['Customer ID']}**
-        - **Risk Tier:** {row['Risk Tier']}
-        - **Churn Probability:** `{row['Churn Prob.']}`
-        - **Plan:** {row['Plan']}
-        - **Contract:** {row['Contract']}
+        **{row['customer_id']}**
+        - **Risk Tier:** `pending model`
+        - **Churn Probability:** `pending model`
+        - **Plan:** {row['plan_type']}
+        - **Contract:** {row['contract_type']}
         """)
     with d2:
         st.markdown(f"""
         **Engagement signals**
-        - **Days since login:** {row['Days Since Login']} days
-        - **Support tickets:** {row['Support Tickets']}
-        - **Payment delay:** {row['Pay. Delay']} days
-        - **Data usage:** {row['Data (GB)']} GB
+        - **Days since login:** {row['last_login_days_ago']} days
+        - **Support tickets:** {row['num_support_tickets']}
+        - **Payment delay:** {row['payment_delay_days']} days
+        - **Data usage:** {row['data_usage_gb']:.1f} GB
         """)
     with d3:
         st.markdown(f"""
         **Financials**
-        - **CLV estimate:** {row['CLV ($)']}
-        - **Tenure:** — months
-        - **Monthly charges:** —
-        - **Streaming addon:** —
+        - **CLV estimate:** ${row['clv_estimated']:,.2f}
+        - **Tenure:** {row['tenure_months']} months
+        - **Monthly charges:** ${row['monthly_charges']:.2f}
+        - **Streaming addon:** {"✅ Yes" if row['has_streaming_addon'] else "❌ No"}
         """)
 
     st.markdown("**Retention strategy**")
     col_strat, col_override = st.columns(2)
     with col_strat:
-        st.info(f"📌 Recommended: **{row['Recommended Strategy']}**")
+        st.info("📌 Recommended strategy will appear here once the model is connected.")
     with col_override:
         st.selectbox("Override strategy (optional):",
             options=["— keep recommendation —"] + STRATEGIES)
