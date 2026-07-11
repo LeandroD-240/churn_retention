@@ -1,9 +1,12 @@
 """
-VoxTel Churn Prediction — UI Draft
-====================================
-Static layout preview — no model, no data, no charts.
+VoxTel Churn Prediction — Deployment App
+==========================================
 Run with: streamlit run voxtel_app.py
+Requires: champion.pkl and data/voxtel_data.csv in the same directory.
 """
+
+import os
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -248,13 +251,38 @@ def chart_prob_distribution() -> go.Figure:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DATA LOADING
+# MODEL & DATA
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Columns excluded from model features — must match the notebook exactly
+DROP_COLS = [
+    "churned", "customer_id", "total_charges", "clv_estimated",
+    "has_streaming_addon", "tenure_months", "payment_method",
+    "monthly_charges", "retention_action",
+]
+
+def assign_risk_tier(p: float) -> str:
+    return "High" if p >= 0.60 else "Medium" if p >= 0.30 else "Low"
+
+
+@st.cache_resource(show_spinner="Loading champion model…")
+def load_model():
+    with open("data/champion.pkl", "rb") as f:
+        return pickle.load(f)
+
+
 @st.cache_data(show_spinner="Loading subscriber data…")
 def load_data() -> pd.DataFrame:
     return pd.read_csv("data/voxtel_data.csv")
 
-df = load_data()
+
+# Score the full dataset once per session
+model = load_model()
+df    = load_data()
+
+feature_cols       = [c for c in df.columns if c not in DROP_COLS]
+df["churn_proba"]  = model.predict_proba(df[feature_cols])[:, 1].round(4)
+df["risk_tier"]    = df["churn_proba"].apply(assign_risk_tier)
 
 STRATEGIES = [
     "Proactive Retention Call",
@@ -283,10 +311,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("#### 🎯 Filter Subscribers")
 
-    st.multiselect("Risk Tier",
+    sel_risk = st.multiselect("Risk Tier",
         options=["High", "Medium", "Low"],
-        default=["High", "Medium", "Low"],
-        help="Activates once the model is connected.")
+        default=["High", "Medium", "Low"])
 
     sel_plan = st.multiselect("Plan Type",
         options=sorted(df["plan_type"].unique()),
@@ -296,9 +323,8 @@ with st.sidebar:
         options=sorted(df["contract_type"].unique()),
         default=sorted(df["contract_type"].unique()))
 
-    st.slider("Min. Churn Probability",
-        min_value=0.0, max_value=1.0, value=0.30, step=0.05, format="%.0f%%",
-        help="Activates once the model is connected.")
+    min_prob = st.slider("Min. Churn Probability",
+        min_value=0.0, max_value=1.0, value=0.30, step=0.05, format="%.0f%%")
 
     st.markdown("---")
     st.markdown("#### ⚙️ Model Info")
@@ -307,7 +333,7 @@ with st.sidebar:
         "**Source:** champion.pkl  \n"
         "**Prediction window:** next 2 months  \n"
         "**Scoring frequency:** Monthly  \n"
-        f"**Subscribers loaded:** {len(df):,}"
+        f"**Subscribers scored:** {len(df):,}"
     )
 
 
@@ -381,17 +407,21 @@ with tab1:
 # TAB 2 — AT-RISK CUSTOMERS
 # ─────────────────────────────────────────────────────────────────────────────
 with tab2:
-    # Apply the two filters that work without the model
+    # Apply all four sidebar filters
     df_filtered = df[
+        (df["risk_tier"].isin(sel_risk)) &
         (df["plan_type"].isin(sel_plan)) &
-        (df["contract_type"].isin(sel_contract))
+        (df["contract_type"].isin(sel_contract)) &
+        (df["churn_proba"] >= min_prob)
     ].copy()
 
     st.markdown(f"Showing **{len(df_filtered):,}** subscribers matching current filters.")
 
-    # Table — select and rename the most relevant columns
+    # Table
     display_cols = {
         "customer_id":         "Customer ID",
+        "churn_proba":         "Churn Prob.",
+        "risk_tier":           "Risk Tier",
         "plan_type":           "Plan",
         "contract_type":       "Contract",
         "tenure_months":       "Tenure (mo.)",
@@ -402,18 +432,20 @@ with tab2:
         "last_login_days_ago": "Days Since Login",
         "clv_estimated":       "CLV ($)",
     }
-    st.dataframe(
-        df_filtered[list(display_cols.keys())].rename(columns=display_cols),
-        use_container_width=True,
-        height=320,
-    )
+    df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols).copy()
+    df_display["Churn Prob."] = df_display["Churn Prob."].map("{:.1%}".format)
+    st.dataframe(df_display, use_container_width=True, height=320)
 
     st.markdown('<div class="section-title">Customer Detail</div>',
                 unsafe_allow_html=True)
 
     selected_id = st.selectbox(
         "Select a subscriber to inspect:",
-        options=df_filtered["customer_id"].tolist(),
+        options=df_filtered.sort_values("churn_proba", ascending=False)["customer_id"].tolist(),
+        format_func=lambda x: (
+            f"{x}  —  P(churn) = "
+            f"{df_filtered.loc[df_filtered['customer_id'] == x, 'churn_proba'].values[0]:.1%}"
+        ),
     )
 
     row = df_filtered[df_filtered["customer_id"] == selected_id].iloc[0]
@@ -422,8 +454,8 @@ with tab2:
     with d1:
         st.markdown(f"""
         **{row['customer_id']}**
-        - **Risk Tier:** `pending model`
-        - **Churn Probability:** `pending model`
+        - **Risk Tier:** {row['risk_tier']}
+        - **Churn Probability:** `{row['churn_proba']:.1%}`
         - **Plan:** {row['plan_type']}
         - **Contract:** {row['contract_type']}
         """)
@@ -447,7 +479,7 @@ with tab2:
     st.markdown("**Retention strategy**")
     col_strat, col_override = st.columns(2)
     with col_strat:
-        st.info("📌 Recommended strategy will appear here once the model is connected.")
+        st.info("📌 Recommended strategy will appear here once the prescriptive layer is connected.")
     with col_override:
         st.selectbox("Override strategy (optional):",
             options=["— keep recommendation —"] + STRATEGIES)
