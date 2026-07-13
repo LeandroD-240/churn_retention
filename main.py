@@ -128,7 +128,65 @@ def kpi_card(label: str, value: str, sub: str = "") -> str:
     </div>"""
 
 
-def chart_placeholder(label: str, height: int = 300):
+def chart_roi_waterfall(roi: dict) -> go.Figure:
+    labels = ["Revenue at Risk", "Gross Revenue Saved", "Intervention Cost", "Net Savings"]
+    values = [roi["revenue_at_risk"], roi["total_saved"], roi["total_cost"], roi["net_savings"]]
+    colors = [MID, "#4CAF50", ACCENT, MAIN]
+
+    fig = go.Figure(go.Bar(
+        x=labels,
+        y=[abs(v) for v in values],
+        marker=dict(color=colors, line=dict(color=BG, width=1)),
+        text=[f"${v:,.0f}" for v in values],
+        textposition="outside",
+        textfont=dict(size=11, color=TEXT),
+        cliponaxis=False,
+        hovertemplate="<b>%{x}</b><br>$%{y:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(
+        **PLOTLY_BASE,
+        title=dict(text="Campaign ROI Breakdown",
+                   font=dict(size=15, color=TEXT), x=0.01),
+        yaxis=dict(visible=False, range=[0, max(values) * 1.22]),
+        xaxis=dict(tickfont=dict(size=11, color=TEXT), tickcolor="rgba(0,0,0,0)"),
+        margin=dict(t=60, b=10, l=10, r=20),
+        bargap=0.35,
+        height=320,
+    )
+    return fig
+
+
+def chart_strategy_breakdown(roi_df: pd.DataFrame) -> go.Figure:
+    sb = (roi_df.groupby("recommended_strategy")
+                .agg(net=("net_savings", "sum"), n=("customer_id", "count"))
+                .sort_values("net", ascending=True)
+                .reset_index())
+
+    colors = [ACCENT if v == sb["net"].max() else MAIN for v in sb["net"]]
+
+    fig = go.Figure(go.Bar(
+        x=sb["net"],
+        y=sb["recommended_strategy"],
+        orientation="h",
+        marker=dict(color=colors, line=dict(color=BG, width=1)),
+        text=[f"  ${v:,.0f}  ({n} subs)" for v, n in zip(sb["net"], sb["n"])],
+        textposition="outside",
+        textfont=dict(size=10, color=TEXT),
+        cliponaxis=False,
+        hovertemplate="<b>%{y}</b><br>Net savings: $%{x:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(
+        **PLOTLY_BASE,
+        title=dict(text="Net Savings by Strategy",
+                   font=dict(size=15, color=TEXT), x=0.01),
+        xaxis=dict(visible=False, range=[0, sb["net"].max() * 1.6]),
+        yaxis=dict(tickfont=dict(size=11, color=TEXT),
+                   tickcolor="rgba(0,0,0,0)"),
+        margin=dict(t=60, b=10, l=10, r=180),
+        bargap=0.4,
+        height=320,
+    )
+    return fig
     st.markdown(
         f'<div class="chart-placeholder" style="height:{height}px;">📊 {label}</div>',
         unsafe_allow_html=True,
@@ -264,6 +322,18 @@ DROP_COLS = [
 def assign_risk_tier(p: float) -> str:
     return "High" if p >= 0.60 else "Medium" if p >= 0.30 else "Low"
 
+def recommend_strategy(risk_tier: str, plan_type: str, clv: float) -> str:
+    """
+    Rule-based assignment from the Business Understanding doc.
+    High CLV + high risk → costlier intervention (agent call).
+    Medium risk → contract or upgrade depending on plan tier.
+    """
+    if risk_tier == "High":
+        return "Proactive Retention Call" if clv > 500 else "Targeted Discount"
+    elif risk_tier == "Medium":
+        return "Service Upgrade" if plan_type == "Premium" else "Contract Lock-In Incentive"
+    return "Personalized Re-engagement"
+
 
 @st.cache_resource(show_spinner="Loading champion model…")
 def load_model():
@@ -271,18 +341,27 @@ def load_model():
         return pickle.load(f)
 
 
-@st.cache_data(show_spinner="Loading subscriber data…")
-def load_data() -> pd.DataFrame:
-    return pd.read_csv("data/voxtel_data.csv")
+@st.cache_data(show_spinner="Scoring subscriber base…")
+def load_and_score() -> pd.DataFrame:
+    """
+    Loads the CSV, runs inference, and appends churn_proba, risk_tier,
+    and recommended_strategy. Decorated with @st.cache_data so the entire
+    pipeline — including predict_proba — runs exactly once per session
+    regardless of how many times the user changes a sidebar filter.
+    """
+    model        = load_model()
+    df           = pd.read_csv("data/voxtel_data.csv")
+    feature_cols = [c for c in df.columns if c not in DROP_COLS]
+    df["churn_proba"]          = model.predict_proba(df[feature_cols])[:, 1].round(4)
+    df["risk_tier"]            = df["churn_proba"].apply(assign_risk_tier)
+    df["recommended_strategy"] = df.apply(
+        lambda r: recommend_strategy(r["risk_tier"], r["plan_type"], r["clv_estimated"]),
+        axis=1,
+    )
+    return df
 
 
-# Score the full dataset once per session
-model = load_model()
-df    = load_data()
-
-feature_cols       = [c for c in df.columns if c not in DROP_COLS]
-df["churn_proba"]  = model.predict_proba(df[feature_cols])[:, 1].round(4)
-df["risk_tier"]    = df["churn_proba"].apply(assign_risk_tier)
+df = load_and_score()
 
 STRATEGIES = [
     "Proactive Retention Call",
@@ -294,12 +373,39 @@ STRATEGIES = [
     "Priority Tech Support",
 ]
 
-SAMPLE_ROI = pd.DataFrame([
-    {"Strategy": "Proactive Retention Call",   "Subscribers": 842,  "Revenue Saved ($)": "$32,410", "Campaign Cost ($)": "$21,050", "Net Savings ($)": "$11,360"},
-    {"Strategy": "Targeted Discount",          "Subscribers": 631,  "Revenue Saved ($)": "$14,220", "Campaign Cost ($)": "$9,465",  "Net Savings ($)": "$4,755"},
-    {"Strategy": "Contract Lock-In Incentive", "Subscribers": 140,  "Revenue Saved ($)": "$7,980",  "Campaign Cost ($)": "$1,400",  "Net Savings ($)": "$6,580"},
-    {"Strategy": "Service Upgrade",            "Subscribers": 72,   "Revenue Saved ($)": "$9,120",  "Campaign Cost ($)": "$1,440",  "Net Savings ($)": "$7,680"},
-])
+# ── Strategy parameters (cost + conversion rate from Business Understanding) ──
+STRATEGY_PARAMS = {
+    "Proactive Retention Call":    {"cost": 25, "conversion": 0.35},
+    "Targeted Discount":           {"cost": 15, "conversion": 0.28},
+    "Service Upgrade":             {"cost": 20, "conversion": 0.25},
+    "Contract Lock-In Incentive":  {"cost": 10, "conversion": 0.30},
+    "Loyalty Program Enrollment":  {"cost":  8, "conversion": 0.20},
+    "Personalized Re-engagement":  {"cost":  5, "conversion": 0.15},
+    "Priority Tech Support":       {"cost": 18, "conversion": 0.22},
+}
+
+
+def compute_roi(df_campaign: pd.DataFrame) -> dict:
+    """
+    Projected Savings = (TP × Rc × CLV) − (N_contacted × C_intervention)
+    Revenue at Risk   = Σ P(churn_i) × CLV_i
+    """
+    df = df_campaign.copy()
+    df["conversion"] = df["recommended_strategy"].map(
+        lambda s: STRATEGY_PARAMS[s]["conversion"])
+    df["int_cost"]   = df["recommended_strategy"].map(
+        lambda s: STRATEGY_PARAMS[s]["cost"])
+    df["rev_saved"]  = df["conversion"] * df["clv_estimated"]
+    df["net_savings"]= df["rev_saved"] - df["int_cost"]
+
+    return {
+        "revenue_at_risk": (df["churn_proba"] * df["clv_estimated"]).sum(),
+        "total_saved":     df["rev_saved"].sum(),
+        "total_cost":      df["int_cost"].sum(),
+        "net_savings":     df["net_savings"].sum(),
+        "subs_saved":      int(df["conversion"].sum()),
+        "df":              df,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -394,13 +500,13 @@ with tab1:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(chart_risk_donut(), use_container_width=True)
+        st.plotly_chart(chart_risk_donut(), width="stretch")
     with c2:
-        st.plotly_chart(chart_churn_by_contract(), use_container_width=True)
+        st.plotly_chart(chart_churn_by_contract(), width="stretch")
 
     st.markdown('<div class="section-title">Churn Probability Distribution</div>',
                 unsafe_allow_html=True)
-    st.plotly_chart(chart_prob_distribution(), use_container_width=True)
+    st.plotly_chart(chart_prob_distribution(), width="stretch")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -434,18 +540,18 @@ with tab2:
     }
     df_display = df_filtered[list(display_cols.keys())].rename(columns=display_cols).copy()
     df_display["Churn Prob."] = df_display["Churn Prob."].map("{:.1%}".format)
-    st.dataframe(df_display, use_container_width=True, height=320)
+    st.dataframe(df_display, width="stretch", height=320)
 
     st.markdown('<div class="section-title">Customer Detail</div>',
                 unsafe_allow_html=True)
 
+    # Pre-build a lookup so format_func is O(1) per option, not O(n)
+    prob_lookup = df_filtered.set_index("customer_id")["churn_proba"].to_dict()
+
     selected_id = st.selectbox(
         "Select a subscriber to inspect:",
         options=df_filtered.sort_values("churn_proba", ascending=False)["customer_id"].tolist(),
-        format_func=lambda x: (
-            f"{x}  —  P(churn) = "
-            f"{df_filtered.loc[df_filtered['customer_id'] == x, 'churn_proba'].values[0]:.1%}"
-        ),
+        format_func=lambda x: f"{x}  —  P(churn) = {prob_lookup.get(x, 0):.1%}",
     )
 
     row = df_filtered[df_filtered["customer_id"] == selected_id].iloc[0]
@@ -479,7 +585,13 @@ with tab2:
     st.markdown("**Retention strategy**")
     col_strat, col_override = st.columns(2)
     with col_strat:
-        st.info("📌 Recommended strategy will appear here once the prescriptive layer is connected.")
+        strat = row["recommended_strategy"]
+        st.info(
+            f"📌 Recommended: **{strat}**\n\n"
+            f"- Conversion rate: {STRATEGY_PARAMS[strat]['conversion']:.0%}\n"
+            f"- Cost per subscriber: ${STRATEGY_PARAMS[strat]['cost']}\n"
+            f"- Expected CLV saved: ${row['clv_estimated'] * STRATEGY_PARAMS[strat]['conversion']:,.0f}"
+        )
     with col_override:
         st.selectbox("Override strategy (optional):",
             options=["— keep recommendation —"] + STRATEGIES)
@@ -492,34 +604,81 @@ with tab3:
     st.markdown(
         "Applies the **Projected Savings formula** from the Business Understanding "
         "to the current filtered subscriber list. "
-        "Only Medium and High risk subscribers are included in the campaign scope."
+        "Only **Medium and High** risk subscribers are included in the campaign scope."
     )
 
-    r1, r2, r3, r4 = st.columns(4)
-    with r1:
-        st.markdown(kpi_card("Revenue at Risk", "$337,270",
-            "Σ P(churn) × CLV — full exposure"), unsafe_allow_html=True)
-    with r2:
-        st.markdown(kpi_card("Gross Revenue Saved", "$63,730",
-            "Before intervention costs"), unsafe_allow_html=True)
-    with r3:
-        st.markdown(kpi_card("Intervention Cost", "$33,355",
-            "1,685 subscribers contacted"), unsafe_allow_html=True)
-    with r4:
-        st.markdown(kpi_card("Net Projected Savings", "$30,375",
-            "~476 subscribers retained"), unsafe_allow_html=True)
+    # Campaign scope — Low risk excluded (cost > expected benefit)
+    df_campaign = df_filtered[df_filtered["risk_tier"].isin(["High", "Medium"])].copy()
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    if df_campaign.empty:
+        st.warning(
+            "No Medium or High risk subscribers in the current selection. "
+            "Adjust the Risk Tier or Min. Churn Probability filter in the sidebar."
+        )
+    else:
+        roi = compute_roi(df_campaign)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        chart_placeholder("Campaign ROI Waterfall", height=300)
-    with c2:
-        chart_placeholder("Net Savings by Strategy", height=300)
+        # ── KPIs ─────────────────────────────────────────────────────────────
+        r1, r2, r3, r4 = st.columns(4)
+        with r1:
+            st.markdown(kpi_card(
+                "Revenue at Risk",
+                f"${roi['revenue_at_risk']:,.0f}",
+                "Σ P(churn) × CLV — full exposure"
+            ), unsafe_allow_html=True)
+        with r2:
+            st.markdown(kpi_card(
+                "Gross Revenue Saved",
+                f"${roi['total_saved']:,.0f}",
+                "Before intervention costs"
+            ), unsafe_allow_html=True)
+        with r3:
+            st.markdown(kpi_card(
+                "Intervention Cost",
+                f"${roi['total_cost']:,.0f}",
+                f"{len(df_campaign):,} subscribers contacted"
+            ), unsafe_allow_html=True)
+        with r4:
+            st.markdown(kpi_card(
+                "Net Projected Savings",
+                f"${roi['net_savings']:,.0f}",
+                f"~{roi['subs_saved']:,} subscribers retained"
+            ), unsafe_allow_html=True)
 
-    st.markdown('<div class="section-title">Strategy Breakdown</div>',
-                unsafe_allow_html=True)
-    st.dataframe(SAMPLE_ROI, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Charts ───────────────────────────────────────────────────────────
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(chart_roi_waterfall(roi), width="stretch")
+        with c2:
+            st.plotly_chart(chart_strategy_breakdown(roi["df"]), width="stretch")
+
+        # ── Strategy breakdown table ──────────────────────────────────────────
+        st.markdown('<div class="section-title">Strategy Breakdown</div>',
+                    unsafe_allow_html=True)
+
+        sb_table = (roi["df"]
+                    .groupby("recommended_strategy")
+                    .agg(
+                        Subscribers   =("customer_id",  "count"),
+                        Avg_CLV       =("clv_estimated", "mean"),
+                        Revenue_Saved =("rev_saved",     "sum"),
+                        Campaign_Cost =("int_cost",      "sum"),
+                        Net_Savings   =("net_savings",   "sum"),
+                    )
+                    .sort_values("Net_Savings", ascending=False)
+                    .rename(columns={
+                        "Avg_CLV":      "Avg CLV ($)",
+                        "Revenue_Saved":"Revenue Saved ($)",
+                        "Campaign_Cost":"Campaign Cost ($)",
+                        "Net_Savings":  "Net Savings ($)",
+                    }))
+
+        for col in ["Avg CLV ($)", "Revenue Saved ($)", "Campaign Cost ($)", "Net Savings ($)"]:
+            sb_table[col] = sb_table[col].map("${:,.0f}".format)
+
+        st.dataframe(sb_table, width="stretch")
 
     st.markdown("""
     <div class="timing-banner" style="margin-top:20px;">
