@@ -415,24 +415,6 @@ with st.sidebar:
     st.markdown("## 📡 VoxTel")
     st.markdown("### Churn Prediction Dashboard")
     st.markdown("---")
-    st.markdown("#### 🎯 Filter Subscribers")
-
-    sel_risk = st.multiselect("Risk Tier",
-        options=["High", "Medium", "Low"],
-        default=["High", "Medium", "Low"])
-
-    sel_plan = st.multiselect("Plan Type",
-        options=sorted(df["plan_type"].unique()),
-        default=sorted(df["plan_type"].unique()))
-
-    sel_contract = st.multiselect("Contract Type",
-        options=sorted(df["contract_type"].unique()),
-        default=sorted(df["contract_type"].unique()))
-
-    min_prob = st.slider("Min. Churn Probability",
-        min_value=0.0, max_value=1.0, value=0.30, step=0.05, format="%.0f%%")
-
-    st.markdown("---")
     st.markdown("#### ⚙️ Model Info")
     st.markdown(
         "**Model:** Logistic Regression  \n"
@@ -514,14 +496,10 @@ with tab1:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab2:
     # Apply all four sidebar filters
-    df_filtered = df[
-        (df["risk_tier"].isin(sel_risk)) &
-        (df["plan_type"].isin(sel_plan)) &
-        (df["contract_type"].isin(sel_contract)) &
-        (df["churn_proba"] >= min_prob)
-    ].copy()
+    # At-risk subscribers — High and Medium only, sorted by churn probability
+    df_filtered = df[df["risk_tier"].isin(["High", "Medium"])].copy()
 
-    st.markdown(f"Showing **{len(df_filtered):,}** subscribers matching current filters.")
+    st.markdown(f"Showing **{len(df_filtered):,}** at-risk subscribers.")
 
     # Table
     display_cols = {
@@ -592,9 +570,6 @@ with tab2:
             f"- Cost per subscriber: ${STRATEGY_PARAMS[strat]['cost']}\n"
             f"- Expected CLV saved: ${row['clv_estimated'] * STRATEGY_PARAMS[strat]['conversion']:,.0f}"
         )
-    with col_override:
-        st.selectbox("Override strategy (optional):",
-            options=["— keep recommendation —"] + STRATEGIES)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -608,7 +583,7 @@ with tab3:
     )
 
     # Campaign scope — Low risk excluded (cost > expected benefit)
-    df_campaign = df_filtered[df_filtered["risk_tier"].isin(["High", "Medium"])].copy()
+    df_campaign = df[df["risk_tier"].isin(["High", "Medium"])].copy()
 
     if df_campaign.empty:
         st.warning(
