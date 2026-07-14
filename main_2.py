@@ -13,8 +13,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from debug_model import debug_model
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
@@ -363,17 +361,7 @@ def load_and_score() -> pd.DataFrame:
     return df
 
 
-try:
-    df = load_and_score()
-except Exception as exc:
-    st.error(
-        "Subscriber scoring failed while loading the model. "
-        "The dashboard is still available with raw data, but predictions are disabled."
-    )
-    df = pd.read_csv("data/voxtel_data.csv")
-    df["churn_proba"] = 0.0
-    df["risk_tier"] = df["churn_proba"].apply(assign_risk_tier)
-    df["recommended_strategy"] = "Personalized Re-engagement"
+df = load_and_score()
 
 STRATEGIES = [
     "Proactive Retention Call",
@@ -435,6 +423,7 @@ with st.sidebar:
         "**Scoring frequency:** Monthly  \n"
         f"**Subscribers scored:** {len(df):,}"
     )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -531,23 +520,15 @@ with tab2:
     df_display["Churn Prob."] = df_display["Churn Prob."].map("{:.1%}".format)
     st.dataframe(df_display, width="stretch", height=320)
 
-    if df_filtered.empty:
-        st.warning(
-            "No at-risk subscribers match the selected filters. "
-            "Adjust the sidebar controls to show customers."
-        )
-        st.stop()
-
     st.markdown('<div class="section-title">Customer Detail</div>',
                 unsafe_allow_html=True)
 
     # Pre-build a lookup so format_func is O(1) per option, not O(n)
     prob_lookup = df_filtered.set_index("customer_id")["churn_proba"].to_dict()
-    sorted_customer_ids = df_filtered.sort_values("churn_proba", ascending=False)["customer_id"].tolist()
 
     selected_id = st.selectbox(
         "Select a subscriber to inspect:",
-        options=sorted_customer_ids,
+        options=df_filtered.sort_values("churn_proba", ascending=False)["customer_id"].tolist(),
         format_func=lambda x: f"{x}  —  P(churn) = {prob_lookup.get(x, 0):.1%}",
     )
 
