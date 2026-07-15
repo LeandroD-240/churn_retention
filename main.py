@@ -5,15 +5,11 @@ Run with: streamlit run voxtel_app.py
 Requires: champion.pkl and data/voxtel_data.csv in the same directory.
 """
 
-import os
-import pickle
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-
-from debug_model import debug_model
+import pickle
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
