@@ -63,7 +63,17 @@ st.markdown(f"""
 
     /* Horizontal rule */
     [data-testid="stSidebar"] hr {{
-        border-color: rgba(255,219,187,0.25) !important;
+        border-color: rgba(255,219,187,0.35) !important;
+        margin: 10px 0 14px !important;
+    }}
+
+    /* Make file uploader cards readable and less harsh */
+    [data-testid="stSidebar"] .stFileUploader > div,
+    [data-testid="stSidebar"] .stFileUploader label,
+    [data-testid="stSidebar"] .stFileUploader button {{
+        background-color: #3A3A3A !important;
+        color: #F0F0F0 !important;
+        border: 1px solid rgba(255,219,187,0.35) !important;
     }}
 
     .kpi-card {{
@@ -111,6 +121,122 @@ st.markdown(f"""
     }}
 </style>
 """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODEL & DATA
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Columns excluded from model features — must match the notebook exactly
+DROP_COLS = [
+    "churned", "customer_id", "total_charges", "clv_estimated",
+    "has_streaming_addon", "tenure_months", "payment_method",
+    "monthly_charges", "retention_action",
+]
+
+def assign_risk_tier(p: float) -> str:
+    return "High" if p >= 0.60 else "Medium" if p >= 0.30 else "Low"
+
+
+def validate_data_columns(df: pd.DataFrame) -> None:
+    required_cols = {
+        "plan_type", "contract_type", "payment_delay_days", "data_usage_gb",
+        "num_support_tickets", "last_login_days_ago", "monthly_charges",
+        "has_streaming_addon", "tenure_months", "clv_estimated",
+    }
+    missing = sorted(required_cols - set(df.columns))
+    if missing:
+        raise ValueError(f"Uploaded CSV is missing required columns: {', '.join(missing)}")
+
+
+def recommend_strategy(risk_tier: str, plan_type: str, clv: float) -> str:
+    """
+    Rule-based assignment from the Business Understanding doc.
+    High CLV + high risk → costlier intervention (agent call).
+    Medium risk → contract or upgrade depending on plan tier.
+    """
+    if risk_tier == "High":
+        return "Proactive Retention Call" if clv > 500 else "Targeted Discount"
+    elif risk_tier == "Medium":
+        return "Service Upgrade" if plan_type == "Premium" else "Contract Lock-In Incentive"
+    return "Personalized Re-engagement"
+
+
+@st.cache_resource(show_spinner="Loading champion model…")
+def load_model():
+    with open("data/champion.pkl", "rb") as f:
+        return pickle.load(f)
+
+
+def load_customer_data(uploaded_file) -> tuple[pd.DataFrame, str]:
+    if uploaded_file is not None:
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file)
+        return df, uploaded_file.name
+
+
+@st.cache_data(show_spinner="Scoring subscriber base…")
+def load_and_score(input_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Loads the data, runs inference, and appends churn_proba, risk_tier,
+    and recommended_strategy.
+    """
+    model = load_model()
+    df = input_df.copy()
+    validate_data_columns(df)
+    feature_cols = [c for c in df.columns if c not in DROP_COLS]
+    df["churn_proba"] = model.predict_proba(df[feature_cols])[:, 1].round(4)
+    df["risk_tier"] = df["churn_proba"].apply(assign_risk_tier)
+    df["recommended_strategy"] = df.apply(
+        lambda r: recommend_strategy(r["risk_tier"], r["plan_type"], r["clv_estimated"]),
+        axis=1,
+    )
+    return df
+
+
+STRATEGIES = [
+    "Proactive Retention Call",
+    "Targeted Discount",
+    "Service Upgrade",
+    "Contract Lock-In Incentive",
+    "Loyalty Program Enrollment",
+    "Personalized Re-engagement",
+    "Priority Tech Support",
+]
+
+# ── Strategy parameters (cost + conversion rate from Business Understanding) ──
+STRATEGY_PARAMS = {
+    "Proactive Retention Call":    {"cost": 25, "conversion": 0.35},
+    "Targeted Discount":           {"cost": 15, "conversion": 0.28},
+    "Service Upgrade":             {"cost": 20, "conversion": 0.25},
+    "Contract Lock-In Incentive":  {"cost": 10, "conversion": 0.30},
+    "Loyalty Program Enrollment":  {"cost":  8, "conversion": 0.20},
+    "Personalized Re-engagement":  {"cost":  5, "conversion": 0.15},
+    "Priority Tech Support":       {"cost": 18, "conversion": 0.22},
+}
+
+
+def compute_roi(df_campaign: pd.DataFrame) -> dict:
+    """
+    Projected Savings = (TP × Rc × CLV) − (N_contacted × C_intervention)
+    Revenue at Risk   = Σ P(churn_i) × CLV_i
+    """
+    df = df_campaign.copy()
+    df["conversion"] = df["recommended_strategy"].map(
+        lambda s: STRATEGY_PARAMS[s]["conversion"])
+    df["int_cost"]   = df["recommended_strategy"].map(
+        lambda s: STRATEGY_PARAMS[s]["cost"])
+    df["rev_saved"]  = df["conversion"] * df["clv_estimated"]
+    df["net_savings"]= df["rev_saved"] - df["int_cost"]
+
+    return {
+        "revenue_at_risk": (df["churn_proba"] * df["clv_estimated"]).sum(),
+        "total_saved":     df["rev_saved"].sum(),
+        "total_cost":      df["int_cost"].sum(),
+        "net_savings":     df["net_savings"].sum(),
+        "subs_saved":      int(df["conversion"].sum()),
+        "df":              df,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -198,10 +324,13 @@ PLOTLY_BASE = dict(
 )
 
 
-def chart_risk_donut() -> go.Figure:
+def chart_risk_donut(df: pd.DataFrame) -> go.Figure:
+    risk_counts = df["risk_tier"].value_counts().reindex(["High", "Medium", "Low"]).fillna(0)
+    values = [int(risk_counts.get("High", 0)), int(risk_counts.get("Medium", 0)), int(risk_counts.get("Low", 0))]
+
     fig = go.Figure(go.Pie(
         labels=["High", "Medium", "Low"],
-        values=[1662, 140, 3198],
+        values=values,
         hole=0.58,
         sort=False,
         marker=dict(
@@ -217,7 +346,7 @@ def chart_risk_donut() -> go.Figure:
         title=dict(text="Subscriber Risk Distribution",
                    font=dict(size=15, color=TEXT), x=0.01),
         annotations=[dict(
-            text="5,000<br><span style='font-size:11px;color:#888'>scored</span>",
+            text=f"{len(df):,}<br><span style='font-size:11px;color:#888'>scored</span>",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=18, color=TEXT),
         )],
@@ -229,9 +358,16 @@ def chart_risk_donut() -> go.Figure:
     return fig
 
 
-def chart_churn_by_contract() -> go.Figure:
-    contracts  = ["Two-year", "One-year", "Month-to-month"]
-    churn_pcts = [0.08, 0.18, 0.52]
+def chart_churn_by_contract(df: pd.DataFrame) -> go.Figure:
+    contracts = ["Two-year", "One-year", "Month-to-month"]
+    churn_pcts = []
+
+    for contract in contracts:
+        if "contract_type" in df.columns:
+            subset = df[df["contract_type"] == contract]
+            churn_pcts.append(float(subset["churn_proba"].mean()) if not subset.empty else 0.0)
+        else:
+            churn_pcts.append(0.0)
 
     fig = go.Figure(go.Bar(
         x=churn_pcts, y=contracts, orientation="h",
@@ -259,7 +395,7 @@ def chart_churn_by_contract() -> go.Figure:
     return fig
 
 
-def chart_prob_distribution() -> go.Figure:
+def chart_prob_distribution(df: pd.DataFrame) -> go.Figure:
     np.random.seed(42)
     probs = np.concatenate([
         np.random.beta(1.2, 8,  3198),   # Low risk cluster
@@ -307,126 +443,38 @@ def chart_prob_distribution() -> go.Figure:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODEL & DATA
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Columns excluded from model features — must match the notebook exactly
-DROP_COLS = [
-    "churned", "customer_id", "total_charges", "clv_estimated",
-    "has_streaming_addon", "tenure_months", "payment_method",
-    "monthly_charges", "retention_action",
-]
-
-def assign_risk_tier(p: float) -> str:
-    return "High" if p >= 0.60 else "Medium" if p >= 0.30 else "Low"
-
-def recommend_strategy(risk_tier: str, plan_type: str, clv: float) -> str:
-    """
-    Rule-based assignment from the Business Understanding doc.
-    High CLV + high risk → costlier intervention (agent call).
-    Medium risk → contract or upgrade depending on plan tier.
-    """
-    if risk_tier == "High":
-        return "Proactive Retention Call" if clv > 500 else "Targeted Discount"
-    elif risk_tier == "Medium":
-        return "Service Upgrade" if plan_type == "Premium" else "Contract Lock-In Incentive"
-    return "Personalized Re-engagement"
-
-
-@st.cache_resource(show_spinner="Loading champion model…")
-def load_model():
-    with open("data/champion.pkl", "rb") as f:
-        return pickle.load(f)
-
-
-@st.cache_data(show_spinner="Scoring subscriber base…")
-def load_and_score() -> pd.DataFrame:
-    """
-    Loads the CSV, runs inference, and appends churn_proba, risk_tier,
-    and recommended_strategy. Decorated with @st.cache_data so the entire
-    pipeline — including predict_proba — runs exactly once per session
-    regardless of how many times the user changes a sidebar filter.
-    """
-    model        = load_model()
-    df           = pd.read_csv("data/voxtel_data.csv")
-    feature_cols = [c for c in df.columns if c not in DROP_COLS]
-    df["churn_proba"]          = model.predict_proba(df[feature_cols])[:, 1].round(4)
-    df["risk_tier"]            = df["churn_proba"].apply(assign_risk_tier)
-    df["recommended_strategy"] = df.apply(
-        lambda r: recommend_strategy(r["risk_tier"], r["plan_type"], r["clv_estimated"]),
-        axis=1,
-    )
-    return df
-
-
-try:
-    df = load_and_score()
-except Exception as exc:
-    st.error(
-        "Subscriber scoring failed while loading the model. "
-        "The dashboard is still available with raw data, but predictions are disabled."
-    )
-    df = pd.read_csv("data/voxtel_data.csv")
-    df["churn_proba"] = 0.0
-    df["risk_tier"] = df["churn_proba"].apply(assign_risk_tier)
-    df["recommended_strategy"] = "Personalized Re-engagement"
-
-STRATEGIES = [
-    "Proactive Retention Call",
-    "Targeted Discount",
-    "Service Upgrade",
-    "Contract Lock-In Incentive",
-    "Loyalty Program Enrollment",
-    "Personalized Re-engagement",
-    "Priority Tech Support",
-]
-
-# ── Strategy parameters (cost + conversion rate from Business Understanding) ──
-STRATEGY_PARAMS = {
-    "Proactive Retention Call":    {"cost": 25, "conversion": 0.35},
-    "Targeted Discount":           {"cost": 15, "conversion": 0.28},
-    "Service Upgrade":             {"cost": 20, "conversion": 0.25},
-    "Contract Lock-In Incentive":  {"cost": 10, "conversion": 0.30},
-    "Loyalty Program Enrollment":  {"cost":  8, "conversion": 0.20},
-    "Personalized Re-engagement":  {"cost":  5, "conversion": 0.15},
-    "Priority Tech Support":       {"cost": 18, "conversion": 0.22},
-}
-
-
-def compute_roi(df_campaign: pd.DataFrame) -> dict:
-    """
-    Projected Savings = (TP × Rc × CLV) − (N_contacted × C_intervention)
-    Revenue at Risk   = Σ P(churn_i) × CLV_i
-    """
-    df = df_campaign.copy()
-    df["conversion"] = df["recommended_strategy"].map(
-        lambda s: STRATEGY_PARAMS[s]["conversion"])
-    df["int_cost"]   = df["recommended_strategy"].map(
-        lambda s: STRATEGY_PARAMS[s]["cost"])
-    df["rev_saved"]  = df["conversion"] * df["clv_estimated"]
-    df["net_savings"]= df["rev_saved"] - df["int_cost"]
-
-    return {
-        "revenue_at_risk": (df["churn_proba"] * df["clv_estimated"]).sum(),
-        "total_saved":     df["rev_saved"].sum(),
-        "total_cost":      df["int_cost"].sum(),
-        "net_savings":     df["net_savings"].sum(),
-        "subs_saved":      int(df["conversion"].sum()),
-        "df":              df,
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("## 📡 VoxTel")
-    st.markdown("### Churn Prediction Dashboard")
-    st.markdown("---")
-    st.markdown("#### ⚙️ Model Info")
+    st.image("img/Gemini_VoxTel_Logo.png", width=240)
+    st.markdown("#### 📁 Data Loader")
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload customer data (CSV)",
+        type=["csv"],
+        help="Use an updated CSV with the same column structure as the bundled dataset.",
+    )
+
+    if uploaded_file is not None:
+        st.sidebar.success(f"Using uploaded file: {uploaded_file.name}")
+    else:
+        st.sidebar.info("Upload a CSV to start scoring subscribers.")
+        st.stop()
+
+    try:
+        source_df, data_source_name = load_customer_data(uploaded_file)
+        df = load_and_score(source_df)
+    except Exception as exc:
+        st.sidebar.warning(
+            "The uploaded file could not be scored."
+            f"\n\nDetails: {exc}"
+        )
+        st.error("Please upload a CSV file with the expected columns and values.")
+        st.stop()
+    st.markdown("#### ⚙️ Data & Model")
     st.markdown(
+        f"**Data source:** {data_source_name}  \n"
         "**Model:** Logistic Regression  \n"
-        "**Source:** champion.pkl  \n"
+        "**Source:** data/champion.pkl (GitHub)  \n"
         "**Prediction window:** next 2 months  \n"
         "**Scoring frequency:** Monthly  \n"
         f"**Subscribers scored:** {len(df):,}"
@@ -471,31 +519,37 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1 — PORTFOLIO OVERVIEW
 # ─────────────────────────────────────────────────────────────────────────────
 with tab1:
+    risk_counts = df["risk_tier"].value_counts().reindex(["High", "Medium", "Low"]).fillna(0)
+    high_risk_count = int(risk_counts.get("High", 0))
+    medium_risk_count = int(risk_counts.get("Medium", 0))
+    revenue_at_risk = int((df["churn_proba"] * df["clv_estimated"]).sum())
+    avg_clv = int(df["clv_estimated"].mean())
+
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        st.markdown(kpi_card("Total Subscribers Scored", "5,000",
-            "1,662 High · 140 Medium risk"), unsafe_allow_html=True)
+        st.markdown(kpi_card("Total Subscribers Scored", f"{len(df):,}",
+            f"{high_risk_count:,} High · {medium_risk_count:,} Medium risk"), unsafe_allow_html=True)
     with k2:
-        st.markdown(kpi_card("High-Risk Subscribers", "1,662",
-            "33.2% of subscriber base"), unsafe_allow_html=True)
+        st.markdown(kpi_card("High-Risk Subscribers", f"{high_risk_count:,}",
+            f"{high_risk_count / len(df):.1%} of subscriber base"), unsafe_allow_html=True)
     with k3:
-        st.markdown(kpi_card("Revenue at Risk", "$337,270",
+        st.markdown(kpi_card("Revenue at Risk", f"${revenue_at_risk:,.0f}",
             "Σ P(churn) × CLV across all subscribers"), unsafe_allow_html=True)
     with k4:
-        st.markdown(kpi_card("Avg. Customer Lifetime Value", "$1,205",
+        st.markdown(kpi_card("Avg. Customer Lifetime Value", f"${avg_clv:,.0f}",
             "Basis for intervention prioritisation"), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(chart_risk_donut(), width="stretch")
+        st.plotly_chart(chart_risk_donut(df), width="stretch")
     with c2:
-        st.plotly_chart(chart_churn_by_contract(), width="stretch")
+        st.plotly_chart(chart_churn_by_contract(df), width="stretch")
 
     st.markdown('<div class="section-title">Churn Probability Distribution</div>',
                 unsafe_allow_html=True)
-    st.plotly_chart(chart_prob_distribution(), width="stretch")
+    st.plotly_chart(chart_prob_distribution(df), width="stretch")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
