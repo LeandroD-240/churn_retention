@@ -458,7 +458,7 @@ with st.sidebar:
         st.sidebar.success(f"Using uploaded file: {uploaded_file.name}")
     else:
         st.sidebar.info("Upload a CSV to start scoring subscribers.")
-        st.sidebar.markdown("If you don't the data sctructure, [check the documentation]()", unsafe_allow_html=True)
+        st.sidebar.markdown("If you don't know the data sctructure, [check the documentation]()", unsafe_allow_html=True)
         st.stop()
 
     try:
