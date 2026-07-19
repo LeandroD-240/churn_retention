@@ -12,7 +12,23 @@
 
 ## Index
 
-A
+1. [Description](#description)
+   - [Context and Problem](#context-and-problem)
+   - [Solution Implemented](#solution-implemented)
+   - [Tools used](#tools-used)
+2. [Project Status](#project-status)
+3. [Functionalities](#functionalities)
+   - [Portfolio Overview](#portfolio-overview)
+   - [At-Risk Customers](#at-risk-customers)
+   - [ROI Simulator](#roi-simulator)
+   - [Retention Actions](#retention-actions)
+   - [Bringing Your Own Data](#bringing-your-own-data)
+   - [Business documentation](#business-documentation)
+4. [Access](#access)
+   - [Non-technical users](#non-technical-users)
+   - [Technical users](#technical-users)
+5. [Technologies](#technologies)
+6. [License](#license)
 
 ---
 
@@ -67,7 +83,7 @@ All phases of CRISP-DM are complete and documented:
 
 ---
 
-## Funcionalities
+## Functionalities
 
 The dashboard is built for the people who will actually use it day to day — retention managers, marketing leads, and finance analysts — not just data scientists. No coding or modeling knowledge is required to read any of the screens below.
 
@@ -195,9 +211,16 @@ streamlit run main.py
 
 ---
 
-## Tecnologies
+## Technologies
 
-A
+| Layer | Technology | Purpose |
+|---|---|---|
+| **Data** | Python 3.11, pandas | Data generation, cleaning, feature engineering |
+| **Modeling** | Scikit-Learn | Logistic Regression, Grid Search, Classification report |
+| **Serialization** | pickle | Model artifact persistence |
+| **App** | Streamlit | Real-time application data (dashboard) |
+| **Visualization** | Matplotlib, Plotly | EDA dashboard, KPI charts |
+| **Methodology** | CRISP-DM | End-to-end data science process framework |
 
 ---
 
