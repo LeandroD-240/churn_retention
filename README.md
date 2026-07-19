@@ -167,18 +167,30 @@ cd churn_retention
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Train the model
-# Explore the notebook in the `notebook` folder
-# Load and train the model
-
-# 4. Run the app
+# 3. Run the app
 streamlit run main.py
+
+# 4. Explore the rest of the files
+# There are some interesting files
+# The notebook, the dataset, the champion model
 ```
 
 #### Project structure
 
 ```
-
+├──churn_retention
+│   └── data/
+|       ├── champion.pkl                          # Champion model trained during experimentation
+|       └── voxtel_data.csv                       # Dataset
+│   └── notebook/
+|       ├── Business_Context.md                   # Markdown file explaining the context of the company and the problem
+|       ├── Data_dictionary.md                    # Explanation of the dataset and the valid data used on this project
+|       ├── churn_and_retention_notebook.ipynb    # Notebook with the experimentation and charts made
+|       └── Notebook files                        # Additional files related with the notebook
+|   ├── img                                       # Logo for the page
+|   ├── README.md                                 # This file
+|   ├── main.py                                   # Python file to load and deploy the app page with the model and data
+│   └── requirements.txt                          # Packages for pip
 ```
 
 ---
