@@ -44,7 +44,7 @@ This is fundamentally a data problem: with 24+ months of behavioral, financial, 
 
 ### Solution Implemented
 
-The project follows the full **CRISP-DM** methodology, translating a broad retention problem into a deployable decision-support system built on two connected layers:
+The project follows the full **[CRISP-DM](https://github.com/LeandroD-240/churn_retention/blob/main/notebook/churn_and_retetion_notebook.ipynb)** methodology, translating a broad retention problem into a deployable decision-support system built on two connected layers:
 
 **Predictions.** A binary classification model (Logistic Regression, selected via GridSearchCV after benchmarking against a baseline) scores every subscriber with the probability they will churn **within the next 2 months** — a deliberately short, operationally realistic window rather than an open-ended "will this customer ever leave" forecast. Each subscriber is segmented into a **risk tier** (Low / Medium / High) based on that probability, and model behavior is explained end-to-end using permutation importance and SHAP (bar + beeswarm), so every prediction is auditable, not just accurate.
 
@@ -52,7 +52,7 @@ The project follows the full **CRISP-DM** methodology, translating a broad reten
 
 The system also encodes an operational constraint that's easy to overlook in a purely technical build: a correct prediction that arrives too late is worthless. Retention campaigns take roughly 3–4 weeks to design and execute, so every prediction is paired with a reminder that action must be taken within 2–3 weeks of each monthly scoring cycle — otherwise the customer churns before the intervention ever reaches them.
 
-All of this is delivered through an interactive **Streamlit dashboard** where users can browse the full subscriber base, drill into individual customers, override the recommended strategy, and simulate campaign ROI in real time.
+All of this is delivered through an interactive **[Streamlit dashboard](https://churn-retention-leandro-diaz.streamlit.app/)** where users can browse the full subscriber base, drill into individual customers, override the recommended strategy, and simulate campaign ROI in real time.
 
 ### Tools Used
 
@@ -131,7 +131,7 @@ Each action carries its own estimated cost and expected success rate behind the 
 
 ### Bringing Your Own Data
 
-The simulator is built to work with any subscriber dataset that follows the same structure, so you can plug in your own file instead of the sample data. Your file should be a **CSV** with one row per subscriber and include the following columns:
+The simulator is built to work with any subscriber dataset that follows the same **[structure](https://github.com/LeandroD-240/churn_retention/blob/main/notebook/Data_dictionary.md)**, so you can plug in your own file instead of the sample data. Your file should be a **[CSV](https://github.com/LeandroD-240/churn_retention/blob/main/data/voxtel_data.csv)** with one row per subscriber and include the following columns:
 
 | Column | What it should contain |
 |---|---|
@@ -156,8 +156,9 @@ The simulator is built to work with any subscriber dataset that follows the same
 - The more complete and recent your data is, the more reliable the risk scores will be. Missing values in key columns (especially `last_login_days_ago`, `payment_delay_days`, and `num_support_tickets`) will reduce the model's confidence for that subscriber.
 
 ### Business documentation
-+ One gif page functionality
-+ CRISP-DM notebook with EDA and modeling
++ One-page [executive summary](https://drive.google.com/file/d/1AgcRJEXbyAEjdYqMBPgUJmQNj_NR7Ihh/view?usp=sharing)
++ CRISP-DM [`notebook`](https://github.com/LeandroD-240/churn_retention/blob/main/notebook/churn_and_retetion_notebook.ipynb) with EDA and modeling
++ [Presentation](https://drive.google.com/file/d/1jtwJYbnO1M5D97WiIxmLk-wWyKMruVI6/view) of the project
 
 ---
 
